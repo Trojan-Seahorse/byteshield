@@ -1,79 +1,46 @@
 # Velum · LLM PII Firewall
 
-**A transparent proxy that automatically detects and redacts personally identifiable information before it reaches the LLM. Restores PII in responses before returning to the user.**
+A transparent proxy that automatically detects and redacts personally identifiable information before it reaches the LLM, then restores it in responses. The LLM never sees the original data.
 
 ```
-User → Hermes/Any Client → [Velum PII Firewall] → LLM API
-                              ↑
-                 Redact → Forward → Restore → User
+User → Any Client → [Velum] → LLM API
+                      ↑
+            Redact → Forward → Restore → User
 ```
-
-## Why
-
-LLM APIs are black boxes — your conversation data is logged, stored, and potentially used for model training. Sending messages containing real names, phone numbers, ID numbers, or addresses is equivalent to handing that data to a third party.
-
-Velum intercepts PII before it leaves your network, replacing it with anonymous identifiers (e.g., `P-00128`, `L-23017`). The LLM never sees the original data. Responses are automatically restored — transparent to the user.
-
-## Key Features
-
-| Feature | Description |
-|---------|-------------|
-| **Transparent Proxy** | OpenAI-compatible API endpoint. Just change the URL. |
-| **Multi-Mode Switch** | In-message `!pii` prefix toggles redaction strategies on the fly. |
-| **Per-Type Identifier** | Each entity type uses a distinct prefix (P-person O-org L-loc T-phone...) — LLM can distinguish entity types. |
-| **SSE Streaming Restore** | Full DeepSeek `reasoning_content` restoration. |
-| **Compound Location Enhancement** | 430+ economic zone names (parks, new districts, etc.) to patch HanLP NER blind spots. |
-| **Fail-Open** | Pass-through on error — never blocks service. |
-| **Low Footprint** | Only argus-redact + FastAPI. Single container, < 500MB RAM. |
 
 ## Prerequisites
 
 | Requirement | Note |
 |-------------|------|
 | Docker | 24+, with docker compose |
-| LLM API | Any OpenAI-compatible API (DMXAPI, OpenAI, etc.) |
-| Python | 3.12 (dev/testing only; deployment uses Docker) |
+| Upstream LLM API | Any OpenAI-compatible API (DMXAPI, OpenAI, etc.) |
 | Memory | ≥ 1GB (HanLP model ~400MB) |
 
-## Quick Start
+## Deployment
+
+### Option 1: Standalone Docker
 
 ```bash
-# 1. Clone the repo
 git clone https://github.com/Trojan-Seahorse/velum.git
 cd velum
-
-# 2. Build the image
 docker build -t velum .
-
-# 3. Start the container
 docker run -d -p 8000:8000 \
   -e UPSTREAM_URL=https://your-llm-api.com/v1 \
   -e ARGUS_REDACT_PSEUDONYM_SALT=$(openssl rand -hex 16) \
   --name velum velum
-
-# 4. Verify connectivity
-curl http://localhost:8000/health
-# → {"status": "ok", "pii_enabled": true}
-
-# 5. Test PII redaction
-curl http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-api-key" \
-  -d '{
-    "model": "deepseek-chat",
-    "messages": [
-      {"role": "user", "content": "!pii debug Zhang Wei phone 13900001111"}
-    ],
-    "stream": true
-  }'
 ```
 
-> **Tip**: In step 3, `UPSTREAM_URL` points to your LLM API. `ARGUS_REDACT_PSEUDONYM_SALT` seeds deterministic pseudonym generation — use a random string.
+Verify:
 
-### Docker Compose (with Hermes Gateway)
+```bash
+curl http://localhost:8000/health
+# → {"status":"ok","upstream":"https://your-llm-api.com/v1","pii":"ok"}
+```
+
+### Option 2: Docker Compose (with Hermes Gateway)
 
 ```yaml
-# docker-compose.yml
+# docker-compose.yml (place in velum repo root)
 services:
   velum:
     build: .
@@ -86,76 +53,76 @@ services:
       - PYTHONUNBUFFERED=1
       - UPSTREAM_URL=https://your-llm-api.com/v1
       - PII_ENABLED=true
-      - ARGUS_REDACT_PSEUDONYM_SALT=your-random-salt
+      - ARGUS_REDACT_PSEUDONYM_SALT=your-random-salt-here
     restart: unless-stopped
     mem_limit: 1g
 
   hermes:
     image: nousresearch/hermes-agent:latest
+    container_name: hermes
+    command: ["gateway", "run"]
+    volumes:
+      - ./hermes:/opt/data
     environment:
-      - LLM_BACKEND_URL=http://velum:8000/v1
+      - API_SERVER_ENABLED=true
+      - API_SERVER_HOST=0.0.0.0
+      - API_SERVER_KEY=your-api-key
     depends_on:
       - velum
+    restart: unless-stopped
 ```
 
-```bash
-# Start
-docker compose up -d
+> **Important**: Hermes stores its LLM backend URL in `./hermes/config.yaml` and `./hermes/auth.json` — set both to `http://velum:8000/v1`. This is NOT configured via environment variable.
 
-# View logs
+```bash
+# Create Hermes data directory and config
+mkdir -p hermes
+# Edit ./hermes/config.yaml, set base_url: http://velum:8000/v1
+# Edit ./hermes/auth.json, set base_url: http://velum:8000/v1
+
+docker compose up -d
 docker logs -f velum
 ```
 
 ### Client Configuration
 
-Point your LLM client to `http://your-host:8000/v1`. The API key is your upstream LLM key (Velum proxies it, never stores it).
+Point your LLM client to Velum's address. Use your upstream LLM API key — Velum proxies it, never stores it.
 
-| Client | Where to configure |
-|--------|-------------------|
-| CherryStudio | Settings → Model Services → API URL |
-| Hermes | Env var `LLM_BACKEND_URL` |
+| Client | Configuration |
+|--------|--------------|
+| CherryStudio | Settings → Model Services → API URL: `http://your-host:17829/v1` |
+| Hermes | `config.yaml` + `auth.json`: `base_url: http://velum:8000/v1` |
 | OpenAI SDK | `base_url="http://your-host:8000/v1"` |
 
-## Mode Switching
+## Daily Use
 
-Prepend `!pii` to your message to **temporarily** switch the redaction mode for that message. The next message without a prefix automatically returns to the default identifier mode. Both full-width `！` and half-width `!` are accepted.
+Prepend `!pii` to your message to switch redaction mode for that message. Messages without the prefix use the default strategy. Both full-width `！` and half-width `!` are accepted.
 
 | Command | Effect |
 |---------|--------|
-| `!pii` | Show firewall status and strategy configuration |
-| `!pii debug <text>` | Analyze what PII would be detected in the text (no LLM call) |
-| `!pii 伪名` / `!pii pseudonym` | Pseudonym mode for this message (realistic fake names) |
-| `!pii org,loc` | Partial override for this message: keep organization and location |
+| `!pii` | Show firewall status and strategy |
+| `!pii debug <text>` | Analyze PII detection without calling the LLM |
+| `!pii pseudonym` | Use realistic fake names (other types still redacted) |
+| `!pii org,loc` | Keep organization and location names unredacted |
 
-### Example: Temporary Pseudonym Mode
-
-```
-User: !pii pseudonym Look up Zhang Wei's contact info
-      → This message sent in pseudonym mode. LLM sees fake names.
-      → Response restored with real names before display.
-
-User: Now look up Li Na's   ← No prefix — auto-returns to identifier mode
-      → Normal redaction with per-type prefixes
-```
-
-### Example: Debug Analysis
+Example:
 
 ```
-User: !pii debug Li Ming works at Xiong'an New Area, phone 13900001111
+User: !pii debug Zhang Wei works at SIPAC, phone 13900001111
 
-Original: Li Ming works at Xiong'an New Area, phone 13900001111
+Original: Zhang Wei works at SIPAC, phone 13900001111
 Redacted: P-47141 works at P-72185, phone T-39281
 Entities: 3
 
 Detected:
-  [1] person  Li Ming → P-47141
-  [1] person  Xiong'an New Area → P-72185
-  [1] phone   13900001111 → T-39281
+  [1] person  Zhang Wei → P-47141
+  [2] person  Suzhou Industrial Park → P-72185
+  [3] phone   13900001111 → T-39281
 
-User: Help me summarize   ← Next message — normal conversation
+User: Help me summarize   ← Next message, no prefix — back to default mode
 ```
 
-## Redaction Strategies
+### Redaction Strategies
 
 | Entity Type | Strategy | Example |
 |-------------|----------|---------|
@@ -171,136 +138,49 @@ User: Help me summarize   ← Next message — normal conversation
 | self_reference | keep | (untouched) |
 | date | remove | 2024-03-15 → D-33501 |
 
-## Compound Location Enhancement
+## Environment Variables
 
-HanLP's Chinese NER model has blind spots for economic zones with non-standard administrative suffixes (e.g., "成都天府新区", "雄安新区") — they are classified as neither ORG nor LOC, passing through undetected.
+| Variable | Required | Description |
+|----------|:--------:|-------------|
+| `UPSTREAM_URL` | ✅ | Upstream LLM API URL, e.g. `https://www.dmxapi.cn/v1` |
+| `ARGUS_REDACT_PSEUDONYM_SALT` | ✅ | Salt for pseudonym generation — use a random string |
+| `PII_ENABLED` | — | Set to `false` to disable redaction (default `true`) |
 
-Velum includes 430+ compound location names (national new districts, economic development zones, high-tech zones, free trade zones) injected via argus-redact's `names` parameter at Layer 1 regex matching. The name list is maintained as a plain text file (`location_names.txt`) — no code changes needed to add or remove entries.
+## Troubleshooting
 
-## Architecture
+### `/health` returns `pii: error`
 
-```
-main.py (~620 lines)
-├── /health                   Health check
-├── /v1/models                Model list (proxied upstream)
-├── /v1/chat/completions      OpenAI-compatible endpoint
-│   ├── get_last_user_content  Extract last user message
-│   ├── parse_mode_prefix      Parse !pii mode prefix
-│   ├── redact_text            Call argus-redact for PII redaction
-│   ├── [Upstream LLM call]
-│   ├── restore_text           Restore PII in LLM response
-│   └── SSE buffer-restore     DeepSeek streaming response handling
-│
-├── location_names.txt         Compound location names (430+ entries)
-├── test_strategies.py         Strategy config integration tests
-└── test_custom_dict.py        names parameter + compound location tests
+HanLP model download failed. Check container network and manually warm up:
+
+```bash
+docker exec velum python -c "from argus_redact import redact; redact('test', lang='zh')"
 ```
 
-### PII Pipeline
+### `!pii debug` shows missed detections
 
-```
-User Message → parse_mode_prefix() → Mode Detection
-             → redact_text() → argus-redact redact()
-                   ├─ Layer 1: regex (names parameter)
-                   └─ Layer 2: HanLP cascaded NER
-             → Redacted Message → Upstream LLM
-             → LLM Response → restore_text() → Restore PII → User
-```
+Short text (< 8 characters) or locations with non-standard administrative suffixes (e.g. "Suzhou Industrial Park") may be missed by NER. This is a known HanLP limitation.
 
-### SSE Streaming
+- **Workaround**: Use `!pii pseudonym` for that message
+- **Permanent fix**: Add the missed location to `location_names.txt` and restart the container
 
-DeepSeek's SSE stream splits identifiers across chunks (e.g., `P-00` + `128`), making per-chunk restoration impossible. Velum uses a **buffer-concat-restore** strategy: cache all SSE chunks → concatenate full text → restore PII → repack as single SSE event.
+### Upstream LLM connection timeout
 
-## Limitations
+```bash
+# Check environment variable
+docker exec velum env | grep UPSTREAM_URL
 
-1. **`names` entities classified as `person`**: argus-redact's Layer 1 regex bypasses the NER classification pipeline, defaulting to person type. Does not affect privacy — per-type prefixes distinguish entity types, and `detailed=True` exposes type information.
-2. **Standard administrative names still rely on NER**: Locations with standard suffixes (e.g., "海淀区卫健委") are covered by HanLP NER, not the `names` list.
-3. **Short text NER may fail**: Inputs under 8 characters lack sufficient context for HanLP segmentation.
-4. **money entity out of scope**: argus-redact's 56-type catalog does not include money; RMB amounts are not redacted.
-5. **Transparent proxy, not encrypted transport**: If your upstream LLM API uses HTTP, messages travel in plaintext on the wire.
-
-## argus-redact Engine
-
-Velum delegates all PII detection to argus-redact, which uses a **three-layer progressive architecture**:
-
-| Layer | Mechanism | Coverage |
-|-------|-----------|----------|
-| **Layer 1: Regex** | Rule-based regex for format-constrained PII (phone numbers, ID numbers, emails, bank cards) + `names` parameter for custom entity injection | Format-fixed PII + custom dictionaries |
-| **Layer 2: Cascaded NER** | HanLP 2.x Chinese NER. Recognition order: person → location → organization (cascaded dependency) | Person, location, organization, school, date, etc. |
-| **Layer 3: Semantic/LLM** | Reserved interface for context-dependent PII (currently disabled) | — |
-
-### HanLP Model Stack
-
-| Component | Details |
-|-----------|---------|
-| **Encoder** | ELECTRA-small (12-layer Transformer, ~14M params) |
-| **NER Decoder** | Biaffine NER (treats NER as dependency parsing, natively supports nested/flat entities) |
-| **Training Data** | MSRA (largest Chinese NER corpus) + OntoNotes 4.0 Chinese |
-| **Entity Types** | 56 categories (PER/LOC/ORG/GPE/FAC/VEH/...) |
-| **Annotation Scheme** | PKU standard: person(nr) → location(ns) → organization(NT), cascaded labeling |
-
-> **Key insight**: Biaffine NER makes no flat-entity assumption — in `[北京/ns 大学/n]NT`, "北京" is simultaneously an independent location entity AND part of an organization phrase. This span-based approach natively handles compound entities.
-
-## Agent Integration Guide
-
-### CherryStudio
-
-1. Settings → Model Services → Add Provider
-2. API URL: `http://your-host:8000/v1`
-3. API Key: your upstream LLM API key (Velum proxies it, never stores it)
-4. Model list syncs automatically from upstream
-
-### Hermes Gateway
-
-Point Hermes to Velum as the LLM backend:
-
-```yaml
-# Hermes environment variable
-LLM_BACKEND_URL=http://velum:8000/v1
+# Verify container can reach upstream
+docker exec velum python -c "import httpx; r = httpx.get('$UPSTREAM_URL/models'); print(r.status_code)"
 ```
 
-> **Note**: Hermes intercepts all `/`-prefixed commands at the gateway level. Velum uses `!pii` prefix — unaffected. Do NOT use `/pii`.
+### Container OOM
 
-### Any OpenAI SDK
+HanLP model is ~400MB and pre-downloaded at build time. Allocate ≥ 1GB at runtime:
 
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://your-host:8000/v1",
-    api_key="your-upstream-api-key",
-)
-
-# Normal usage — PII is automatically redacted
-response = client.chat.completions.create(
-    model="your-model",
-    messages=[{"role": "user", "content": "!pii debug test text"}],
-)
+```bash
+docker run --memory=1g ...          # standalone
+mem_limit: 1g                        # docker compose
 ```
-
-### WeChat (via Hermes WeChat Adapter)
-
-Hermes includes a built-in WeChat adapter. Message flow: WeChat → Hermes Gateway → Velum → Upstream LLM → back. Chat normally in WeChat; `!pii` commands are typed directly in the chat box.
-
-## Test Environment
-
-| Component | Version / Notes |
-|-----------|----------------|
-| **Runtime** | Synology NAS (DSM 7.x) · Docker 24+ |
-| **Python** | 3.12-slim |
-| **argus-redact** | ≥ 0.5.0 (with HanLP Chinese NER) |
-| **Gateway** | Hermes Agent (nousresearch/hermes-agent:latest) |
-| **Clients** | WeChat (via Hermes adapter) · CherryStudio · Any OpenAI SDK |
-| **Upstream LLM** | DeepSeek V4 Pro |
-| **Memory** | < 500MB (including HanLP model) |
-
-### Suitable For
-
-- ✅ Personal LLM use via IM gateways (WeChat, Telegram, Web)
-- ✅ Internal enterprise LLM proxy with unified PII policy
-- ✅ Any OpenAI-compatible API upstream
-- ⚠️ High-concurrency production needs load balancing (single-instance by default)
-- ❌ Environments requiring full SOC2/HIPAA compliance (this is a technical tool, not a certified compliance solution)
 
 ## License
 

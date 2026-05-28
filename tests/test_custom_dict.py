@@ -2,7 +2,8 @@
 
 验证 argus-redact 的 `names` 参数能否用于注入非标准行政后缀的经济功能区地名。
 
-Run in Docker: docker exec velum python /app/test_custom_dict.py
+Run locally: python tests/test_custom_dict.py
+   Or copy to container: docker cp tests/test_custom_dict.py velum:/app/ && docker exec velum python /app/test_custom_dict.py
 """
 
 from argus_redact import redact, restore

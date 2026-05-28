@@ -1,6 +1,7 @@
 """Verify argus-redact per-entity strategy API + Velum DEFAULT_CONFIG
 
-Run in Docker: docker exec velum python /app/test_strategies.py
+Run locally: python tests/test_strategies.py
+   Or copy to container: docker cp tests/test_strategies.py velum:/app/ && docker exec velum python /app/test_strategies.py
 """
 from argus_redact import redact, redact_pseudonym_llm, restore
 from copy import deepcopy
