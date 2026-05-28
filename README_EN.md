@@ -3,9 +3,11 @@
 **A transparent proxy that automatically detects and redacts personally identifiable information before it reaches the LLM. Restores PII in responses before returning to the user.**
 
 ```
-User → Hermes/Any Client → [Velum PII Firewall] → LLM API
-                              ↑
-                 Redact → Forward → Restore → User
+Request:  User → Client → [Velum] → LLM API
+           PII intercepted, replaced with anonymous identifiers
+
+Response: User ← Client ← [Velum] ← LLM API
+           Identifiers restored to original values
 ```
 
 ## Why
