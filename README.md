@@ -391,7 +391,7 @@ Velum 的 PII 检测完全委托给 argus-redact。它采用**三层递进架构
 
 | 组件 | 说明 |
 |------|------|
-| **编码器** | ELECTRA-small（12 层 Transformer，参数量 ~14M） |
+| **编码器** | ELECTRA-small（12 层 Transformer，~14M 参数 / 0.014B） |
 | **NER 解码器** | Biaffine NER（将 NER 作为依存分析任务，自然支持 nested/flat 实体） |
 | **训练语料** | MSRA（最大中文 NER 语料库）+ OntoNotes 4.0 中文部分 |
 | **实体类型** | 56 类（PER/LOC/ORG/GPE/FAC/VEH/...） |

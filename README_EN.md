@@ -391,7 +391,7 @@ Velum delegates all PII detection to argus-redact, which uses a **three-layer pr
 
 | Component | Details |
 |-----------|---------|
-| **Encoder** | ELECTRA-small (12-layer Transformer, ~14M params) |
+| **Encoder** | ELECTRA-small (12-layer Transformer, ~14M params / 0.014B) |
 | **NER Decoder** | Biaffine NER (treats NER as dependency parsing, natively supports nested/flat entities) |
 | **Training Data** | MSRA (largest Chinese NER corpus) + OntoNotes 4.0 Chinese |
 | **Entity Types** | 56 categories (PER/LOC/ORG/GPE/FAC/VEH/...) |
